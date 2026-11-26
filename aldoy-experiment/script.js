@@ -100,6 +100,8 @@
   let activeChapter = -1;
   let lastTimeLabel = "";
   let storyLocked = null;
+  let scrubRetry = 0;
+  let scrubRetries = 0;
 
   if (video) {
     video.pause();
@@ -113,7 +115,24 @@
     // and when a seek lands (this keeps the last scroll position in sync).
     video.addEventListener("progress", onScroll);
     video.addEventListener("canplay", onScroll);
+    video.addEventListener("loadeddata", onScroll);
     video.addEventListener("seeked", onScroll);
+
+    // iOS refuses to decode a paused video until it has been played once, and
+    // ignores preload. A muted play/pause on the first touch unlocks seeking.
+    if (window.matchMedia("(hover: none)").matches) {
+      const unlock = () => {
+        if (reduceMotion) return;
+        const started = video.play();
+        if (started && typeof started.then === "function") {
+          started.then(() => video.pause()).catch(() => {});
+        } else {
+          video.pause();
+        }
+        onScroll();
+      };
+      window.addEventListener("touchstart", unlock, { passive: true, once: true });
+    }
   }
 
   function formatTime(seconds) {
@@ -178,9 +197,23 @@
   // The hero film is scrubbed directly from scroll. The source is encoded with
   // a keyframe every 4 frames (≈13 ms seeks, measured) so a seek can be issued
   // on almost every frame without the decoder falling behind.
+  // Some mobile browsers do not fire `progress` reliably while a paused video
+  // buffers, so a blocked seek gets a few timed retries instead of waiting.
+  function scheduleScrubRetry(progress) {
+    if (scrubRetry || scrubRetries > 10 || progress <= 0) return;
+    scrubRetries += 1;
+    scrubRetry = window.setTimeout(() => {
+      scrubRetry = 0;
+      onScroll();
+    }, 350);
+  }
+
   function scrubVideo(progress) {
     if (reduceMotion || !video || videoDuration <= 0) return;
-    if (video.readyState < 2 || video.seeking) return;
+    if (video.readyState < 2 || video.seeking) {
+      scheduleScrubRetry(progress);
+      return;
+    }
 
     const target = progress * Math.max(0, videoDuration - 0.04);
     if (Math.abs(target - video.currentTime) < 0.02) return;
@@ -190,7 +223,10 @@
     if (video.buffered.length) {
       const bufferedEnd = video.buffered.end(video.buffered.length - 1);
       const fullyBuffered = bufferedEnd >= videoDuration - 0.25;
-      if (!fullyBuffered && target > bufferedEnd - 0.08) return;
+      if (!fullyBuffered && target > bufferedEnd - 0.08) {
+        scheduleScrubRetry(progress);
+        return;
+      }
     }
 
     try {
@@ -430,7 +466,48 @@
     requestAnimationFrame(renderFrame);
   }
 
-  window.addEventListener("scroll", onScroll, { passive: true });
+  // iOS fires few (or no) scroll events while momentum scrolling, so a scroll
+  // event alone is not enough there. A short rAF watcher rides along with touch
+  // and wheel input, updates while the page is actually moving, then stops.
+  let watchFrame = 0;
+  let watchY = -1;
+  let watchIdle = 0;
+
+  function watchScroll() {
+    watchFrame = 0;
+    const y = window.scrollY;
+    if (y !== watchY) {
+      watchY = y;
+      watchIdle = 0;
+      onScroll();
+    } else {
+      watchIdle += 1;
+    }
+    if (watchIdle < 10) watchFrame = requestAnimationFrame(watchScroll);
+  }
+
+  function startScrollWatch() {
+    if (watchFrame) return;
+    watchY = window.scrollY;
+    watchIdle = 0;
+    watchFrame = requestAnimationFrame(watchScroll);
+  }
+
+  window.addEventListener(
+    "scroll",
+    () => {
+      scrubRetries = 0;
+      startScrollWatch();
+      onScroll();
+    },
+    { passive: true }
+  );
+  window.addEventListener("touchstart", startScrollWatch, { passive: true });
+  window.addEventListener("touchmove", startScrollWatch, { passive: true });
+  window.addEventListener("pageshow", onScroll);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) onScroll();
+  });
   if (spaceRail) {
     spaceRail.addEventListener(
       "scroll",

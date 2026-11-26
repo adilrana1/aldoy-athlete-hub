@@ -61,4 +61,5 @@ python serve.py 8000     # custom port
 - A public timetable (class days/times per discipline) is the biggest remaining content gap; the site deliberately avoids inventing one.
 - The video is a single continuous walkthrough, so chapter copy is timed to its scene cuts rather than to separate clips.
 - Performance: all section geometry (story, pin, manifesto, light-section ranges, card widths) is measured once and on resize, so the scroll frame only writes styles and never reads layout; the hero fade uses opacity/transform only, and there are no per-frame filters, blend modes or backdrop animations over the film.
+- Mobile: iOS throttles `scroll` events during momentum scrolling, so a short rAF watcher keeps the story in sync while the page is moving. The video is also unlocked with a muted play/pause on the first touch, because iOS will not seek a paused video that has never played. After the page is backgrounded, the current scroll position is re-applied.
 - This is a standalone design experiment and does not modify the live site.
